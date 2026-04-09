@@ -1,0 +1,221 @@
+
+<style>
+  .ctrl-row { display:flex; align-items:center; gap:12px; margin:8px 0; font-size:13px; color:var(--color-text-secondary); flex-wrap:wrap; }
+  .btn { padding:5px 14px; border-radius:var(--border-radius-md); border:0.5px solid var(--color-border-secondary); background:var(--color-background-primary); color:var(--color-text-primary); cursor:pointer; font-size:13px; }
+  .btn:hover { background:var(--color-background-secondary); }
+  .btn.primary { background:var(--color-background-info); color:var(--color-text-info); border-color:var(--color-border-info); }
+  .badge { font-size:11px; padding:2px 8px; border-radius:999px; font-weight:500; }
+</style>
+
+<div style="padding:12px 0 0;">
+  <div class="ctrl-row">
+    <span>Points</span>
+    <input type="range" id="n-slider" min="20" max="120" value="60" step="10" style="flex:1;max-width:120px">
+    <span id="n-label">60</span>
+    <span style="margin-left:8px">K</span>
+    <input type="range" id="k-slider" min="2" max="6" value="3" step="1" style="flex:1;max-width:100px">
+    <span id="k-label">3</span>
+    <button class="btn" onclick="resetData()">Regenerate</button>
+    <button class="btn primary" onclick="runStep()">Next step ▶</button>
+    <button class="btn" onclick="runAll()">Auto-run</button>
+    <button class="btn" onclick="fullReset()">Reset</button>
+  </div>
+  <div class="ctrl-row">
+    <span id="status" style="font-size:13px;color:var(--color-text-secondary);min-height:18px;">Click "Next step" to begin the first iteration</span>
+  </div>
+  <canvas id="canvas" style="width:100%;border-radius:var(--border-radius-lg);border:0.5px solid var(--color-border-tertiary)"></canvas>
+  <div style="margin-top:8px;font-size:12px;color:var(--color-text-tertiary);max-height:64px;overflow-y:auto;line-height:1.6;" id="step-log"></div>
+  <div class="ctrl-row" style="margin-top:8px;gap:16px;" id="legend"></div>
+</div>
+
+<script>
+const COLORS = ['#E24B4A','#378ADD','#1D9E75','#BA7517','#7F77DD','#D85A30'];
+const LIGHT_COLORS = ['#FCEBEB','#E6F1FB','#E1F5EE','#FAEEDA','#EEEDFE','#FAECE7'];
+
+let points = [], centroids = [], assignments = [];
+let phase = 'init', iteration = 0, animId = null;
+
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+
+function getK() { return parseInt(document.getElementById('k-slider').value); }
+function getN() { return parseInt(document.getElementById('n-slider').value); }
+function log(msg) {
+  const el = document.getElementById('step-log');
+  el.innerHTML = msg + '<br>' + el.innerHTML;
+}
+function setStatus(s) { document.getElementById('status').textContent = s; }
+
+function resizeCanvas() {
+  const w = canvas.parentElement.clientWidth;
+  canvas.width = w;
+  canvas.height = Math.min(w * 0.55, 320);
+}
+
+function generatePoints(n, k) {
+  const pts = [], W = canvas.width, H = canvas.height, pad = 40;
+  const centers = Array.from({length: k}, () => ({
+    x: pad + Math.random() * (W - 2*pad),
+    y: pad + Math.random() * (H - 2*pad)
+  }));
+  for (let i = 0; i < n; i++) {
+    const c = centers[Math.floor(Math.random() * k)];
+    pts.push({
+      x: c.x + (Math.random()-0.5) * (W * 0.18),
+      y: c.y + (Math.random()-0.5) * (H * 0.18)
+    });
+  }
+  return pts;
+}
+
+function initCentroids(k) {
+  const W = canvas.width, H = canvas.height, pad = 40;
+  return Array.from({length: k}, () => ({
+    x: pad + Math.random() * (W - 2*pad),
+    y: pad + Math.random() * (H - 2*pad)
+  }));
+}
+
+function assign() {
+  assignments = points.map(p => {
+    let best = 0, bestD = Infinity;
+    centroids.forEach((c, i) => {
+      const d = Math.hypot(p.x - c.x, p.y - c.y);
+      if (d < bestD) { bestD = d; best = i; }
+    });
+    return best;
+  });
+}
+
+function moveCentroids() {
+  const newC = centroids.map((_, i) => {
+    const pts = points.filter((_, j) => assignments[j] === i);
+    if (!pts.length) return {...centroids[i]};
+    return {
+      x: pts.reduce((s,p) => s+p.x, 0) / pts.length,
+      y: pts.reduce((s,p) => s+p.y, 0) / pts.length
+    };
+  });
+  const moved = newC.some((c,i) => Math.hypot(c.x-centroids[i].x, c.y-centroids[i].y) > 0.5);
+  centroids = newC;
+  return moved;
+}
+
+function draw() {
+  const W = canvas.width, H = canvas.height;
+  ctx.clearRect(0, 0, W, H);
+  const isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+  ctx.fillStyle = isDark ? '#1a1a1a' : '#ffffff';
+  ctx.fillRect(0, 0, W, H);
+
+  if (assignments.length && phase !== 'init') {
+    points.forEach((p, i) => {
+      const ci = assignments[i];
+      ctx.beginPath();
+      ctx.moveTo(p.x, p.y);
+      ctx.lineTo(centroids[ci].x, centroids[ci].y);
+      ctx.strokeStyle = COLORS[ci];
+      ctx.globalAlpha = 0.08;
+      ctx.lineWidth = 1;
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+    });
+  }
+
+  points.forEach((p, i) => {
+    const ci = assignments.length ? assignments[i] : -1;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, 5, 0, Math.PI * 2);
+    ctx.fillStyle = ci >= 0 ? COLORS[ci] : (isDark ? '#888' : '#aaa');
+    ctx.globalAlpha = 0.85;
+    ctx.fill();
+    ctx.globalAlpha = 1;
+    ctx.strokeStyle = isDark ? '#1a1a1a' : '#ffffff';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+  });
+
+  centroids.forEach((c, i) => {
+    ctx.beginPath();
+    ctx.arc(c.x, c.y, 13, 0, Math.PI * 2);
+    ctx.fillStyle = isDark ? '#2a2a2a' : '#ffffff';
+    ctx.fill();
+    ctx.strokeStyle = COLORS[i];
+    ctx.lineWidth = 2.5;
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(c.x, c.y, 5, 0, Math.PI * 2);
+    ctx.fillStyle = COLORS[i];
+    ctx.fill();
+    ctx.fillStyle = COLORS[i];
+    ctx.font = '500 11px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('C' + (i+1), c.x, c.y - 18);
+  });
+
+  document.getElementById('legend').innerHTML = centroids.map((_, i) => {
+    const cnt = assignments.filter(a => a === i).length;
+    return `<span class="badge" style="background:${LIGHT_COLORS[i]};color:${COLORS[i]};border:1px solid ${COLORS[i]}40">C${i+1}: ${cnt} pts</span>`;
+  }).join('');
+}
+
+function resetData() {
+  clearTimeout(animId);
+  resizeCanvas();
+  points = generatePoints(getN(), getK());
+  centroids = initCentroids(getK());
+  assignments = [];
+  iteration = 0;
+  phase = 'init';
+  document.getElementById('step-log').innerHTML = '';
+  setStatus('Randomly placed ' + getK() + ' centroids (C) and ' + getN() + ' data points');
+  draw();
+}
+
+function fullReset() { clearTimeout(animId); resetData(); }
+
+function runStep() {
+  clearTimeout(animId);
+  if (phase === 'init' || phase === 'move') {
+    assign();
+    phase = 'assign';
+    const counts = centroids.map((_, i) => assignments.filter(a=>a===i).length);
+    log(`Round ${iteration+1} · Assign: ${counts.map((c,i)=>'C'+(i+1)+'='+c).join(', ')}`);
+    setStatus(`Round ${iteration+1}: each point assigned to its nearest centroid`);
+    draw();
+  } else if (phase === 'assign') {
+    const moved = moveCentroids();
+    iteration++;
+    phase = moved ? 'move' : 'converged';
+    if (!moved) {
+      setStatus('Converged! Centroids no longer move. Total iterations: ' + iteration);
+      log('Converged after ' + iteration + ' round(s)');
+    } else {
+      setStatus(`Round ${iteration}: centroids moved to cluster means — continuing`);
+      log(`Round ${iteration} · Centroids updated`);
+    }
+    draw();
+  }
+}
+
+function runAll() {
+  clearTimeout(animId);
+  if (phase === 'converged') { fullReset(); return; }
+  function step() {
+    if (phase === 'converged') return;
+    runStep();
+    animId = setTimeout(step, 700);
+  }
+  step();
+}
+
+document.getElementById('k-slider').addEventListener('input', e => {
+  document.getElementById('k-label').textContent = e.target.value;
+});
+document.getElementById('n-slider').addEventListener('input', e => {
+  document.getElementById('n-label').textContent = e.target.value;
+});
+
+resizeCanvas();
+resetData();
+</script>
